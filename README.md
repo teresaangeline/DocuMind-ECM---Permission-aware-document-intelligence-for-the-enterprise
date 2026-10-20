@@ -1,119 +1,128 @@
-# DocuMind ECM
+# OpsPilot — Human-in-the-Loop Agentic Operations for Content Pipelines
 
-**Permission-aware document intelligence for the enterprise: classify, extract, and ask questions over documents, with access control enforced at retrieval time.**
+> An AI agent that watches operational telemetry, detects anomalies, **investigates root cause**, **recommends a fix**, waits for a **human to approve**, executes the action through a **guarded registry**, then **verifies the result and learns from it**.
 
-![Python](https://img.shields.io/badge/python-3.11+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-009688) ![ChromaDB](https://img.shields.io/badge/ChromaDB-vector%20store-orange) ![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF) ![License](https://img.shields.io/badge/license-MIT-green)
+Built with Python · FastAPI · SQLite · Claude (Anthropic API) · pytest · Docker · GitHub Actions
 
-## Overview
+![CI](https://github.com/<your-username>/opspilot/actions/workflows/ci.yml/badge.svg)
 
-Most "chat with your PDF" projects treat every document as equally visible. In a real enterprise that is a data-leak risk: an employee should never receive an answer derived from a confidential HR or finance document.
+---
 
-DocuMind ECM brings Enterprise Content Management practices (capture, classification, metadata, ACLs) into a modern LLM pipeline. Documents are ingested, automatically classified, enriched with structured metadata, and made searchable through a retrieval-augmented (RAG) assistant that **only retrieves what the asking user is allowed to read**.
+## The problem
 
-> The author is an ECM practitioner (OpenText xECM, Documentum, Captiva), and the design maps those concepts directly onto the LLM stack.
+Enterprise content platforms (document capture/OCR, workflow queues, search indexing) fail in boring, expensive ways: OCR failure rates spike, queues stall, indexers fall behind. Today a human watches dashboards, guesses the cause, and runs a runbook by hand. Fully autonomous remediation is too risky for production, and plain alerting is too dumb. **OpsPilot sits in between: the AI does the investigation, the human keeps the decision.**
 
-## Key features
+## The closed loop
 
-- **Ingestion**: PDF / TXT / MD text extraction, page-aware chunking with overlap.
-- **Auto-classification**: LLM labels each document (invoice, contract, policy, resume, report, letter, other).
-- **Metadata extraction**: structured fields (e.g. invoice number, vendor, total) stored as JSON, similar to object attributes in Documentum.
-- **Permission-aware RAG**: role-to-access-level filtering is applied *inside the vector query*, so restricted chunks never reach the LLM prompt.
-- **Cited answers**: every answer references source file and page.
-- **Graceful degradation**: if classification fails, ingestion still succeeds.
-- **Engineering hygiene**: typed API, Docker, tests with the LLM mocked, lint + test CI.
-
-## ECM concepts mapped to this project
-
-| ECM concept (Captiva / Documentum / xECM) | DocuMind ECM |
-|---|---|
-| Capture | `app/ingest.py`: extraction and chunking (OCR hook on roadmap) |
-| Document classification | `app/classify.py` |
-| Object type and attributes | SQLite metadata store (`app/db.py`) |
-| ACL / security levels | `app/security.py` + filtered vector query |
-| Search and retrieval | ChromaDB + cited RAG (`app/rag.py`) |
-
-## Architecture
-
-```
- Streamlit UI ──► FastAPI ──► Ingest (extract → chunk)
-                    │              ├─► Classify + extract fields (LLM → JSON)
-                    │              ├─► SQLite   (document metadata)
-                    │              └─► ChromaDB (chunks + access_level)
-                    │
-                    └─► /ask → role → allowed levels → filtered retrieval → LLM → answer + citations
+```mermaid
+flowchart LR
+    A[Customer telemetry] --> B[Collect & store]
+    B --> C[Detect anomaly<br/>robust z-score]
+    C --> D[AI investigates<br/>root cause + evidence]
+    D --> E[AI recommends<br/>1 guarded action]
+    E --> F{Human approves?}
+    F -- reject / false positive --> L
+    F -- approve --> G[Execute action<br/>registry + schema validation]
+    G --> H[Verify: did metric recover?]
+    H --> L[(Feedback store)]
+    L -. raises thresholds,<br/>down-ranks failing actions .-> C
+    L -. outcome history as evidence .-> D
 ```
 
-## Access model
+## What makes this more than a demo
 
-| Role | Can read |
+| Concern | How it is handled |
 |---|---|
-| employee | public |
-| manager | public, internal |
-| admin | public, internal, confidential |
+| **Safety** | The LLM can only *propose* actions from a typed registry (`actions.py`). Unknown actions or bad params are rejected. Nothing runs without explicit human approval. |
+| **Reliability** | If the LLM is unavailable, returns invalid JSON, or proposes a disallowed action, the system falls back to a deterministic rule-based investigator. It also runs fully offline with no API key. |
+| **Auditability** | Every state transition (detected → recommended → approved → executed → outcome) is written to an append-only `audit` table with actor and detail. |
+| **Learning loop** | Verified outcomes are stored. Actions that repeatedly fail for a metric are down-ranked in future recommendations; "false positive" rejections raise that tenant/metric's detection threshold. |
+| **Incident grouping** | Simultaneous anomalies (e.g. surge + latency + lag) become **one** incident so the investigator sees the full picture. |
+| **Robust detection** | Median/MAD z-score over a rolling baseline instead of mean/stddev, which past spikes distort. |
+| **Testability** | The core loop is framework-free and fully covered by tests, including the "system adapts after a failed fix" scenario. |
 
-## Demo
-
-Upload the files in `samples/`, using the access level in each filename, then ask:
-
-> *"What salary band do senior engineers get?"*
-
-- As **employee**: the assistant reports it could not find the answer.
-- As **admin**: it answers and cites `salary_policy_confidential.txt`.
-
-Same question, different result, enforced before the LLM ever sees the text.
-
-## Quick start
+## Quickstart
 
 ```bash
-git clone https://github.com/<your-username>/documind-ecm.git
-cd documind-ecm
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env                                # add your ANTHROPIC_API_KEY
-uvicorn app.main:app --reload                       # API docs: http://localhost:8000/docs
-streamlit run frontend/streamlit_app.py             # UI:       http://localhost:8501
+git clone https://github.com/<your-username>/opspilot && cd opspilot
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+
+# 1) Watch the whole loop in your terminal (no server, no API key needed)
+python -m opspilot.demo --scenario ocr_degradation --auto
+#    scenarios: ocr_degradation | ingestion_surge | stuck_queue | upstream_outage
+
+# 2) Run the API + approval console
+uvicorn opspilot.main:app --reload      # open http://127.0.0.1:8000  (docs at /docs)
+
+# 3) Tests
+pytest -q
 ```
 
-Or: `docker compose up --build`
+To use a real LLM for investigation: `cp .env.example .env`, set `ANTHROPIC_API_KEY`, and export it. Without a key the rule-based investigator is used; the `source` field on each recommendation tells you which one ran.
+
+### Example run
+
+```
+[1] COLLECT   ingesting 40 min of telemetry for 'acme-insurance' (incident injected at the end)
+[2] DETECT
+    CRITICAL anomaly on queue_latency_s: 55.0 vs baseline 8.4 (z=+47.6); related: ['ingestion_rate', 'indexing_lag_s']
+[3] INVESTIGATE (AI)
+    root cause: Ingestion surge exceeding processing capacity (confidence 80%)
+      - queue_latency_s = 55.0 vs baseline 8.4 (z=+47.6)
+      - ingestion_rate = 420.0 vs baseline 117.7 (z=+46.4)
+      - indexing_lag_s = 90.0 vs baseline 19.9 (z=+25.0)
+      - Normal: ocr_failure_rate
+[4] RECOMMEND scale_workers {"service": "processing", "delta": 2}  [risk: low]
+[5] HUMAN APPROVED -> Scaled 'processing' by +2 workers.
+[6] VERIFY    system recovers; ingesting 3 more minutes of telemetry
+[7] LEARN     {'status': 'resolved', 'post_action_z': [...]}
+```
 
 ## API
 
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/health` | Health check |
-| POST | `/documents` | Upload a file with `access_level` (public / internal / confidential) |
-| GET | `/documents?role=` | List documents visible to a role, with type and extracted fields |
-| POST | `/ask` | `{question, role}` returns an answer plus sources |
+| Method & path | Purpose |
+|---|---|
+| `POST /metrics` | Ingest telemetry `[{tenant, name, ts, value}]` |
+| `POST /detect` | Run detection; returns new anomaly ids |
+| `GET /anomalies` | List incidents (with related signals) |
+| `POST /anomalies/{id}/investigate` | AI root-cause analysis → creates a recommendation |
+| `GET /recommendations` | Recommendations with root cause, evidence, risk, status |
+| `POST /recommendations/{id}/approve` | **Human approval** → executes the action |
+| `POST /recommendations/{id}/reject` | Reject; `false_positive: true` tunes the detector |
+| `POST /recommendations/{id}/evaluate` | Verify the outcome and store feedback |
+| `GET /actions` · `GET /audit` | Action catalogue · audit trail |
 
-## Tests
+## Repository layout
 
-```bash
-pytest -q
-ruff check .
+```
+opspilot/
+  detector.py      robust z-score detection, incident grouping, per-tenant thresholds
+  investigator.py  LLM investigator (strict JSON + validation) and rule-based fallback
+  actions.py       guarded action registry: risk levels + param schemas
+  pipeline.py      orchestrator + recommendation state machine + feedback/learning
+  simulator.py     synthetic telemetry and incident scenarios
+  main.py          FastAPI app          static/index.html   approval console
+  demo.py          terminal walkthrough db.py / config.py   storage and settings
+tests/             detector, pipeline (incl. learning), API
+docs/architecture.md   design decisions and trade-offs
 ```
 
-Covers role permissions, chunking, JSON parsing and fallback, and API-level role filtering. The LLM is mocked, so no API key is needed. CI runs on every push.
+## Design decisions & honest limitations
 
-## Design decisions
-
-- **Filter before retrieval, not after.** Post-filtering still lets restricted text influence ranking and risks prompt leakage; a metadata filter in the query does not.
-- **Classification is best-effort.** An LLM failure must not block document capture.
-- **Simple stores first.** SQLite and a local ChromaDB keep setup to one command; the interfaces are isolated for a later swap to PostgreSQL + pgvector.
-
-## Limitations
-
-- Roles are passed by the client; there is no real authentication yet (JWT is on the roadmap).
-- Scanned PDFs without a text layer are rejected until OCR is added.
-- No evaluation of answer quality yet.
+- **Actions are simulated.** `actions.py` returns messages instead of calling real systems. The registry is the integration seam: replace each function with a real call (Kubernetes, queue broker, content-platform admin API, PagerDuty).
+- **Synthetic data.** On the simulator's healthy data the detector at `z=6` produced about 1 false positive in 300 runs and missed 0 of 200 injected incidents. Real telemetry (seasonality, trends) needs more work; see the roadmap.
+- **SQLite** keeps setup to zero. Move to Postgres + migrations for multi-user deployments.
+- **No auth yet.** The `approver` field is self-declared. Production needs real identity and role-based approval (e.g. high-risk actions need two approvers).
 
 ## Roadmap
 
-- [ ] OCR for scanned documents (Tesseract)
-- [ ] JWT authentication and per-user ACLs
-- [ ] Evaluation harness (retrieval hit-rate, answer faithfulness)
-- [ ] PostgreSQL + pgvector
-- [ ] SharePoint / Documentum REST connector
-- [ ] Cloud deployment
+- [ ] Seasonality-aware baselines (hour-of-day / day-of-week)
+- [ ] Auth (OAuth/OIDC) and role-based approval policies
+- [ ] Real connectors: Prometheus ingestion, Kubernetes actions, Slack approval buttons
+- [ ] Retrieval over runbooks / past incidents (vector search) as extra LLM evidence
+- [ ] Offline evaluation harness for investigator accuracy across scenarios
+- [ ] Postgres + Alembic, OpenTelemetry tracing of each loop stage
 
 ## License
 
