@@ -4,7 +4,7 @@ OpsPilot — AI-Powered Incident Investigation and Human-Governed Remediation
 
 Built with Python · FastAPI · SQLite · Claude (Anthropic API) · pytest · Docker · GitHub Actions
 
-![CI](https://github.com/<your-username>/opspilot/actions/workflows/ci.yml/badge.svg)
+
 
 ---
 
