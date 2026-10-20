@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpsPilot - approval console</title>
+<style>
+  :root{--bg:#fff;--fg:#1a1a1a;--mut:#667;--bd:#dde;--card:#f7f8fb;--ok:#0a7d3b;--bad:#b3261e;--acc:#2f5bea}
+  @media (prefers-color-scheme:dark){:root{--bg:#14161a;--fg:#e8e8ea;--mut:#9aa;--bd:#2c313a;--card:#1c2026;--ok:#4cc27f;--bad:#ff7b72;--acc:#7c9cff}}
+  body{font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);max-width:960px;margin:0 auto;padding:20px}
+  h1{margin:0 0 4px} .sub{color:var(--mut);margin-bottom:16px}
+  .bar,.card{border:1px solid var(--bd);background:var(--card);border-radius:10px;padding:12px;margin:10px 0}
+  button,select{font:inherit;padding:6px 12px;border-radius:8px;border:1px solid var(--bd);background:var(--bg);color:var(--fg);cursor:pointer}
+  button.p{background:var(--acc);color:#fff;border-color:var(--acc)} button.d{color:var(--bad)}
+  .tag{display:inline-block;padding:1px 8px;border-radius:99px;border:1px solid var(--bd);font-size:12px;margin-right:6px}
+  pre{white-space:pre-wrap;background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:8px;margin:6px 0}
+  .mut{color:var(--mut)}
+</style></head><body>
+<h1>OpsPilot</h1><div class="sub">Detect &rarr; investigate &rarr; recommend &rarr; <b>you approve</b> &rarr; act &rarr; learn</div>
+<div class="bar">
+  <select id="sc"><option>ocr_degradation</option><option>ingestion_surge</option><option>stuck_queue</option><option>upstream_outage</option></select>
+  <button onclick="post('/demo/seed?scenario='+sc.value)">1. Simulate incident</button>
+  <button onclick="post('/detect')">2. Detect</button>
+  <button onclick="post('/demo/recover')">Simulate recovery data</button>
+</div>
+<h3>Anomalies</h3><div id="an"></div>
+<h3>Recommendations awaiting you</h3><div id="rc"></div>
+<script>
+const $=id=>document.getElementById(id);
+async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});
+  if(!r.ok){alert((await r.json()).detail||r.status)} await load();}
+const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+async function load(){
+  const an=await (await fetch('/anomalies')).json(), rc=await (await fetch('/recommendations')).json();
+  $('an').innerHTML=an.map(a=>`<div class="card"><span class="tag">#${a.id}</span><span class="tag">${esc(a.severity)}</span><span class="tag">${esc(a.status)}</span>
+    <b>${esc(a.tenant)}</b> &middot; ${esc(a.metric)} = ${a.value.toFixed(1)} <span class="mut">(baseline ${a.baseline.toFixed(1)}, z=${a.zscore.toFixed(1)})</span>
+    ${a.status==='open'?`<button class="p" onclick="post('/anomalies/${a.id}/investigate')">3. Investigate with AI</button>`:''}</div>`).join('')||'<div class="mut">None yet.</div>';
+  $('rc').innerHTML=rc.map(r=>`<div class="card"><span class="tag">#${r.id}</span><span class="tag">${esc(r.status)}</span><span class="tag">risk: ${esc(r.risk)}</span><span class="tag">${esc(r.source)}</span>
+    <div><b>${esc(r.root_cause)}</b> <span class="mut">(${Math.round((r.confidence||0)*100)}% confidence)</span></div>
+    <pre>${esc((r.evidence||[]).join('\n'))}</pre>
+    <div>Proposed: <code>${esc(r.action)} ${esc(JSON.stringify(r.params))}</code></div><div class="mut">${esc(r.rationale)}</div>
+    ${r.result?`<pre>${esc(r.result.message)}</pre>`:''}
+    ${r.status==='pending_approval'?`<button class="p" onclick="post('/recommendations/${r.id}/approve',{approver:'console-user'})">4. Approve &amp; execute</button>
+      <button class="d" onclick="post('/recommendations/${r.id}/reject',{approver:'console-user',reason:'not now'})">Reject</button>
+      <button class="d" onclick="post('/recommendations/${r.id}/reject',{approver:'console-user',reason:'false positive',false_positive:true})">False positive</button>`:''}
+    ${r.status==='executed'?`<button class="p" onclick="post('/recommendations/${r.id}/evaluate')">5. Verify outcome &amp; learn</button>`:''}</div>`).join('')||'<div class="mut">None yet.</div>';
+}
+load();
+</script></body></html>
