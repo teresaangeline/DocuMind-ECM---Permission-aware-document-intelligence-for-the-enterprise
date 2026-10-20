@@ -1,4 +1,4 @@
-#OpsPilot — AI-Powered Incident Investigation and Human-Governed Remediation
+OpsPilot — AI-Powered Incident Investigation and Human-Governed Remediation
 
 > An AI agent that watches operational telemetry, detects anomalies, **investigates root cause**, **recommends a fix**, waits for a **human to approve**, executes the action through a **guarded registry**, then **verifies the result and learns from it**.
 
